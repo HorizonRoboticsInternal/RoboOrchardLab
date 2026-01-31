@@ -204,7 +204,7 @@ if __name__ == "__main__":
         "pydantic",
         "torch>=2.4.0",
         "torchvision>=0.19.0",
-        "numpy<2",  # dependencies may not be compatible with numpy 2.x
+        "numpy",  # dependencies may not be compatible with numpy 2.x
         "accelerate>=1.10.1",
         "safetensors>=0.6.2",
         "tqdm",
@@ -216,7 +216,7 @@ if __name__ == "__main__":
         "pyzstd",
         # metric
         "torchmetrics>=1.6",
-        "datasets>=4.0.0",
+        "datasets>=3.6.0",
         "sqlalchemy",
         "duckdb-engine",
         "duckdb<=1.3.2",

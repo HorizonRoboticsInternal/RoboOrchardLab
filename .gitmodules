@@ -1,0 +1,3 @@
+[submodule "submodules/openpi"]
+	path = submodules/openpi
+	url = https://github.com/HorizonRoboticsInternal/openpi.git
