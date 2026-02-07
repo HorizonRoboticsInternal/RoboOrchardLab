@@ -179,7 +179,9 @@ include = ["robo_orchard_lab", "tests"]
 
 [dependency-groups]
 openpi = [
+    "torch==2.7.1",
     "datasets==3.6.0",
+    "flash-attn==2.8.3",
     "pytest>=8.3.4",
     "ruff>=0.8.6",
     "pre-commit>=4.0.1",
@@ -188,8 +190,17 @@ openpi = [
     "lerobot",
     "matplotlib>=3.10.0",
     "pynvml>=12.0.0",
+    "chex",
+    "huggingface-hub==0.36.2",
 ]
 
 
 [tool.uv.sources]
 lerobot = { git = "https://github.com/huggingface/lerobot", rev = "0cf864870cf29f4738d3ade893e6fd13fbd7cdb5" }
+
+[tool.uv]
+index-strategy = "unsafe-best-match"
+find-links = ["https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.7.1_cu128.html"]
+
+[tool.uv.extra-build-dependencies]
+"flash-attn" = ["torch==2.7.1"]
