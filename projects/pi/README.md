@@ -5,7 +5,7 @@ Under RoboOrchardLab repo root
 ```bash
 uv sync --group openpi
 uv pip install -e . -e ../Hobot
-cp -r submodules/openpi/src/openpi/models_pytorch/transformers_replace/* .venv/lib/python*/site-packages/transformers/
+cp -r ../Hobot/submodules/openpi/src/openpi/models_pytorch/transformers_replace/* .venv/lib/python*/site-packages/transformers/
 ```
 
 # train
