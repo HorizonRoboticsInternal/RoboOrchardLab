@@ -16,6 +16,8 @@
 
 import importlib
 import os
+import jax
+import torch
 
 
 def load_config(config_file):
@@ -25,3 +27,43 @@ def load_config(config_file):
     config = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(config)
     return config
+
+
+class LossMetric:
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.results = []
+
+    def compute(self, accelerator):
+        if len(self.results) == 0:
+            losses = None
+        else:
+            losses = jax.tree.map(lambda *x: torch.stack(x, dim=0).mean(), *self.results)
+        losses = accelerator.gather_for_metrics(
+            losses, use_gather_object=True
+        )
+        losses = [x for x in losses if x is not None]
+        if len(losses) == 0:
+            return None
+        losses = jax.tree.map(lambda *x: torch.stack(x, dim=0).mean(), *losses)
+        if accelerator.is_main_process:
+            losses = {f'val/{k}': v for k, v in losses.items()}
+            accelerator.log(losses)
+            return losses
+        else:
+            return None
+
+    def update(self, batch, model_outputs):
+        losses = model_outputs
+        if isinstance(losses, list | tuple):
+            losses = {"loss": torch.stack(losses)}
+        elif isinstance(losses, torch.Tensor):
+            losses = {"loss": losses}
+        else:
+            assert isinstance(losses, dict), (
+                "Model forward must return a tensor or a dict/tuple/list of tensors.")
+
+        losses = jax.tree.map(lambda x: x.mean().cpu(), losses)
+        self.results.append(losses)

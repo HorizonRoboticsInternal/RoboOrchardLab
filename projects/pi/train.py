@@ -36,8 +36,8 @@ from accelerate.utils import (
     DistributedDataParallelKwargs,
     ProjectConfiguration
 )
-from utils import load_config
-
+from utils import load_config, LossMetric
+import alf
 from robo_orchard_lab.dataset.collates import collate_batch_dict
 from robo_orchard_lab.pipeline import SimpleTrainer
 from robo_orchard_lab.pipeline.batch_processor import SimpleBatchProcessor
@@ -87,6 +87,8 @@ class MyBatchProcessor(SimpleBatchProcessor):
         losses = jax.tree.map(lambda x: x.mean(), losses)
 
         loss = losses["loss"]
+
+        losses = {f'train/{k}': v for k, v in losses.items()}
 
         return losses, loss
 
@@ -155,7 +157,7 @@ def _collate_fn(items):
     return jax.tree.map(lambda *xs: torch.as_tensor(np.stack([np.asarray(x) for x in xs], axis=0)), *items)
 
 
-def create_data_loader(config, dataset, accelerator):
+def create_data_loader(config, dataset, accelerator, training):
     global_batch_size = config.batch_size
     assert global_batch_size % accelerator.num_processes == 0, (
         "Global batch size must be divisible by the number of processes.")
@@ -171,14 +173,14 @@ def create_data_loader(config, dataset, accelerator):
     train_dataloader = torch.utils.data.DataLoader(
         dataset,
         batch_size=local_batch_size,
-        shuffle=True,
+        shuffle=training,
         num_workers=config.num_workers,
         multiprocessing_context=mp_context,
         pin_memory=True,
         collate_fn=_collate_fn,
         worker_init_fn=_worker_init_fn,
         persistent_workers=config.num_workers > 0,
-        drop_last=True,
+        drop_last=training,
         generator=generator,
     )
     return train_dataloader
@@ -255,7 +257,7 @@ class SaveNormStatsHook(PipelineHooks):
             logger.info("Copied norm_stats.json to %s", dst)
 
 
-def get_resume_from(config):
+def get_resume_from(args, config):
     if not config.resume:
         return None
 
@@ -277,8 +279,7 @@ def get_resume_from(config):
         )
     return os.path.join(checkpoints_dir, checkpoint_name)
 
-def main(args, accelerator):
-    config = load_config(args.config)
+def main(args, config, accelerator):
     build_dataset = config.build_dataset
     config = config.config
 
@@ -293,7 +294,9 @@ def main(args, accelerator):
         logger.info("\n" + pprint.pformat(config))
 
     train_dataset = build_dataset(config)
-    train_dataloader = create_data_loader(config, train_dataset, accelerator)
+    train_dataloader = create_data_loader(config, train_dataset, accelerator, training=True)
+    val_dataset = build_dataset(config, split="val")
+    val_dataloader = create_data_loader(config, val_dataset, accelerator, training=False)
     model = build_model(config)
 
     optimizer, lr_scheduler = build_optimizer(config, model)
@@ -302,12 +305,12 @@ def main(args, accelerator):
     norm_stats_path = None
     if data_config.asset_id is not None:
         norm_stats_path = os.path.join(assets_dir, data_config.asset_id, "norm_stats.json")
-    resume_from = None
-    resume_share_dir = None
-    resume_from = get_resume_from(config)
+    resume_from = get_resume_from(args, config)
     trainer = SimpleTrainer(
         model=model,
         dataloader=train_dataloader,
+        val_dataloader=val_dataloader,
+        metric=LossMetric(),
         optimizer=optimizer,
         lr_scheduler=lr_scheduler,
         accelerator=accelerator,
@@ -334,10 +337,9 @@ def main(args, accelerator):
             ) if norm_stats_path is not None else PipelineHooks(),
         ],
         max_step=config.num_train_steps,
-        step_eval_freq=None,
+        step_eval_freq=500,
         lr_scheduler_step_at="step",
         resume_from=resume_from,
-        resume_share_dir=resume_share_dir,
     )
 
     trainer()
@@ -379,4 +381,6 @@ if __name__ == "__main__":
     logger.info(f"if accelerator initialized:{is_initialized()}")
     logger.info(f"accelerator state: {AcceleratorState._shared_state}")
     set_start_method("spawn", force=True)
-    main(args, accelerator)
+    config = load_config(args.config)
+    with alf.module.original_torch_module_functions():
+        main(args, config, accelerator)
