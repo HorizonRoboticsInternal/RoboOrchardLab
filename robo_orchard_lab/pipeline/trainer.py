@@ -203,10 +203,12 @@ class SimpleTrainer(HookBasedTrainer):
             ) % 10 == 0 and self.accelerator.is_main_process:
                 logger.info(f"eval: {val_step_id + 1}")
         self.accelerator.wait_for_everyone()
+        kwargs = {}
         if "accelerator" in signature(self.metric.compute).parameters:
-            metric = self.metric.compute(accelerator=self.accelerator)
-        else:
-            metric = self.metric.compute()
+            kwargs["accelerator"] = self.accelerator
+        if "step" in signature(self.metric.compute).parameters:
+            kwargs["step"] = self.trainer_progress_state.global_step_id
+        metric = self.metric.compute(**kwargs)
         self.accelerator.wait_for_everyone()
         self.metric.reset()
         torch.cuda.empty_cache()
