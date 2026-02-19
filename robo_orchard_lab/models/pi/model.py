@@ -32,10 +32,24 @@ class PiModel(ModelMixin):
 
     def forward(self, batch):
         device = self.device
+        if "item1" in batch:
+            observation1 = _model.Observation.from_dict(batch["item1"])
+            actions1 = batch["item1"]["actions"]
+            observation2 = _model.Observation.from_dict(batch["item2"])
+            batch = {
+                "observation1": observation1,
+                "actions1": actions1,
+                "observation2": observation2,
+                "item2_is_pad": batch["item2_is_pad"],
+                "horizon": batch["horizon"],
+                "steps_to_go": batch["steps_to_go"],
+            }
+        else:
+            obs = _model.Observation.from_dict(batch)
+            batch = obs, batch["actions"]
+
         batch = jax.tree.map(lambda x: x.to(device), batch)
-        obs = _model.Observation.from_dict(batch)
-        actions = batch["actions"]
-        return self._model((obs, actions))
+        return self._model(batch)
 
 class PiModelConfig(TorchModuleCfg[PiModel]):
     class_type: ClassType_co[PiModel] = PiModel

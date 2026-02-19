@@ -394,5 +394,6 @@ if __name__ == "__main__":
     logger.info(f"accelerator state: {AcceleratorState._shared_state}")
     set_start_method("spawn", force=True)
     config = load_config(args.config)
+    shutil.copy(args.config, os.path.join(workspace_root, 'config.py'))
     with alf.module.original_torch_module_functions():
         main(args, config, accelerator)

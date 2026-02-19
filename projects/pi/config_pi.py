@@ -36,7 +36,7 @@ import hobot2.priors.openpi.weight_loaders as _weight_loaders
 
 data_name = alf.define_config("data_name", "bridge_unambig")
 add_ren_openpi0_randomizations = alf.define_config(
-    "add_ren_openpi0_randomizations", False)
+    "add_ren_openpi0_randomizations", True)
 
 if add_ren_openpi0_randomizations:
     import openpi.models_pytorch.preprocessing_pytorch as _openpi_preprocessing
@@ -82,7 +82,7 @@ elif data_name.startswith("bridge"):
 else:
     raise ValueError(f"Unknown data_name: {data_name}")
 
-model_type = alf.define_config("model_type", "pi05")
+model_type = alf.define_config("model_type", "joint_model")
 assert model_type in ("pi05", "joint_model")
 
 dataset_wrappers = []
@@ -93,8 +93,8 @@ if model_type == "joint_model":
         steps_to_go_loss_weight=0.1,
         repr_loss_weight=0.1,
         separate_repr_token=True,
-        expert_attend_to_repr_token=True,
-        expert_attend_to_pred_token=True,
+        expert_attend_to_repr_token=False,
+        expert_attend_to_pred_token=False,
     )
     dataset_wrappers = [
         partial(hobot_data_loader.PredictionDataset,
@@ -116,11 +116,15 @@ data_cfgs['dataset_wrapper_ctor'] = partial(
 
 LAST_LAYER_INDEX = 17
 
+base_model_type = "pi05"
+assert base_model_type in ("pi0", "pi05")
+base_model_path = "/data/cache/openpi/openpi-assets/pytorch_checkpoints/" + base_model_type + "_base"
+
 config = TrainConfig(
     name="openpi",
     exp_name="exp",
     model=model_config_ctor(
-        pi05=False,
+        pi05=base_model_type == "pi05",
         action_horizon=10,
         # discrete_state_input is default to True for pi05.
         # But openpi official repo uses False for pi05_libero
@@ -149,8 +153,7 @@ config = TrainConfig(
     optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
     ema_decay=0.999,
     # weight_loader=_weight_loaders.PytorchPaliGemmaWeightLoader(),
-    pytorch_weight_path=
-    "/data/cache/openpi/openpi-assets/pytorch_checkpoints/pi0_base",
+    pytorch_weight_path=base_model_path,
     strict_load=model_type != "joint_model",
     num_train_steps=20_000,
     save_interval=5_000,
@@ -160,12 +163,12 @@ config = TrainConfig(
     freeze_filter=[
         nnx_utils.PathRegex(".*/embed_tokens/weight"),
         nnx_utils.PathRegex(".*/lm_head.weight"),
-        nnx_utils.PathRegex(f".*language_model/.*/{LAST_LAYER_INDEX}/post.*"),
-        nnx_utils.PathRegex(f".*language_model/.*/{LAST_LAYER_INDEX}/mlp.*"),
-        nnx_utils.PathRegex(
-            f".*language_model/.*/{LAST_LAYER_INDEX}/self_attn/o_proj.*"),
-        nnx_utils.PathRegex(
-            f".*language_model/.*/{LAST_LAYER_INDEX}/self_attn/v_proj.*"),
+        # nnx_utils.PathRegex(f".*language_model/.*/{LAST_LAYER_INDEX}/post.*"),
+        # nnx_utils.PathRegex(f".*language_model/.*/{LAST_LAYER_INDEX}/mlp.*"),
+        # nnx_utils.PathRegex(
+        #     f".*language_model/.*/{LAST_LAYER_INDEX}/self_attn/o_proj.*"),
+        # nnx_utils.PathRegex(
+        #     f".*language_model/.*/{LAST_LAYER_INDEX}/self_attn/v_proj.*"),
     ],
     freeze_vlm=False,
 )
