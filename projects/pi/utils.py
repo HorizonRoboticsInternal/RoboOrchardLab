@@ -36,7 +36,7 @@ class LossMetric:
     def reset(self):
         self.results = []
 
-    def compute(self, accelerator):
+    def compute(self, accelerator, step):
         if len(self.results) == 0:
             losses = None
         else:
@@ -52,7 +52,7 @@ class LossMetric:
         losses = jax.tree.map(lambda *x: torch.stack(x, dim=0).mean().item(), *losses)
         if accelerator.is_main_process:
             losses = {f'val/{k}': v for k, v in losses.items()}
-            accelerator.log(losses)
+            accelerator.log(losses, step=step)
             return losses
         else:
             return None
