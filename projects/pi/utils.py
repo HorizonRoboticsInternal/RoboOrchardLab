@@ -41,13 +41,15 @@ class LossMetric:
             losses = None
         else:
             losses = jax.tree.map(lambda *x: torch.stack(x, dim=0).mean(), *self.results)
-        losses = accelerator.gather_for_metrics(
-            losses, use_gather_object=True
-        )
-        losses = [x for x in losses if x is not None]
+        all_losses = [None for _ in range(accelerator.num_processes)]
+        if accelerator.num_processes > 1:
+            torch.distributed.all_gather_object(all_losses, losses)
+        else:
+            all_losses[0] = losses
+        losses = [x for x in all_losses if x is not None]
         if len(losses) == 0:
             return None
-        losses = jax.tree.map(lambda *x: torch.stack(x, dim=0).mean(), *losses)
+        losses = jax.tree.map(lambda *x: torch.stack(x, dim=0).mean().item(), *losses)
         if accelerator.is_main_process:
             losses = {f'val/{k}': v for k, v in losses.items()}
             accelerator.log(losses)

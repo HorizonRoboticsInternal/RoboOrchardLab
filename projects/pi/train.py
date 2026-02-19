@@ -157,11 +157,22 @@ def _collate_fn(items):
     return jax.tree.map(lambda *xs: torch.as_tensor(np.stack([np.asarray(x) for x in xs], axis=0)), *items)
 
 
-def create_data_loader(config, dataset, accelerator, training):
+def create_data_loader(config, dataset, accelerator: Accelerator, training):
     global_batch_size = config.batch_size
     assert global_batch_size % accelerator.num_processes == 0, (
         "Global batch size must be divisible by the number of processes.")
     local_batch_size = global_batch_size // accelerator.num_processes
+    shuffle = training
+
+    sampler = None
+    if torch.distributed.is_initialized():
+        sampler = torch.utils.data.distributed.DistributedSampler(
+            dataset,
+            num_replicas=torch.distributed.get_world_size(),
+            rank=torch.distributed.get_rank(),
+            shuffle=shuffle,
+            drop_last=True,
+        )
 
     mp_context = None
     if config.num_workers > 0:
@@ -173,14 +184,15 @@ def create_data_loader(config, dataset, accelerator, training):
     train_dataloader = torch.utils.data.DataLoader(
         dataset,
         batch_size=local_batch_size,
-        shuffle=training,
+        shuffle=(sampler is None and shuffle),  # Don't shuffle if using sampler
+        sampler=sampler,
         num_workers=config.num_workers,
         multiprocessing_context=mp_context,
         pin_memory=True,
         collate_fn=_collate_fn,
         worker_init_fn=_worker_init_fn,
         persistent_workers=config.num_workers > 0,
-        drop_last=training,
+        drop_last=True,
         generator=generator,
     )
     return train_dataloader
