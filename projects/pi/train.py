@@ -16,6 +16,7 @@
 
 import argparse
 import dataclasses
+from inspect import signature
 import json
 import logging
 import multiprocessing
@@ -36,8 +37,10 @@ from accelerate.utils import (
     DistributedDataParallelKwargs,
     ProjectConfiguration
 )
-from utils import load_config, LossMetric
+from utils import load_config
 import alf
+import jax.tree
+import openpi.models.model as _model
 from robo_orchard_lab.dataset.collates import collate_batch_dict
 from robo_orchard_lab.pipeline import SimpleTrainer
 from robo_orchard_lab.pipeline.batch_processor import SimpleBatchProcessor
@@ -91,6 +94,136 @@ class MyBatchProcessor(SimpleBatchProcessor):
         losses = {f'train/{k}': v for k, v in losses.items()}
 
         return losses, loss
+
+
+class LossAndActionMetric:
+    def __init__(self):
+        self.reset()
+        self._warned_missing_sampler = False
+
+    def reset(self):
+        self.loss_results = []
+        self.action_results = []
+
+    @staticmethod
+    def _mean_over_processes(accelerator: Accelerator, values):
+        all_values = [None for _ in range(accelerator.num_processes)]
+        if accelerator.num_processes > 1:
+            torch.distributed.all_gather_object(all_values, values)
+        else:
+            all_values[0] = values
+        gathered = [x for x in all_values if x is not None]
+        if len(gathered) == 0:
+            return None
+        return jax.tree.map(lambda *x: torch.stack(x, dim=0).mean().item(), *gathered)
+
+    @staticmethod
+    def _to_loss_dict(model_outputs):
+        losses = model_outputs
+        if isinstance(losses, list | tuple):
+            losses = {"loss": torch.stack(losses)}
+        elif isinstance(losses, torch.Tensor):
+            losses = {"loss": losses}
+        else:
+            assert isinstance(losses, dict), (
+                "Model forward must return a tensor or a dict/tuple/list of tensors.")
+        return jax.tree.map(lambda x: x.mean().cpu(), losses)
+
+    @staticmethod
+    def _build_eval_inputs(batch):
+        if "item1" in batch:
+            obs_src = batch["item1"]
+            gt_actions = batch["item1"]["actions"]
+        else:
+            obs_src = batch
+            gt_actions = batch["actions"]
+        observation = _model.Observation.from_dict(obs_src)
+        return observation, gt_actions
+
+    def update(self, batch, model_outputs, model=None):
+        self.loss_results.append(self._to_loss_dict(model_outputs))
+
+        if model is None or not hasattr(model, "_model") or not hasattr(model._model, "sample_actions"):
+            if not self._warned_missing_sampler:
+                logger.warning("Skip sampled-action metric because model.sample_actions is unavailable.")
+                self._warned_missing_sampler = True
+            return
+
+        observation, gt_actions = self._build_eval_inputs(batch)
+        device = model.device
+        observation = jax.tree.map(lambda x: x.to(device), observation)
+        gt_actions = gt_actions.to(device=device, dtype=torch.float32)
+        sampled_actions = model._model.sample_actions(device, observation)
+        diff = sampled_actions - gt_actions
+        self.action_results.append({
+            "action_mae": diff.abs().mean().cpu(),
+            "action_mse": diff.square().mean().cpu(),
+        })
+
+    def compute(self, accelerator, step):
+        losses = self._mean_over_processes(
+            accelerator,
+            None if len(self.loss_results) == 0 else jax.tree.map(
+                lambda *x: torch.stack(x, dim=0).mean(), *self.loss_results
+            ),
+        )
+        actions = self._mean_over_processes(
+            accelerator,
+            None if len(self.action_results) == 0 else jax.tree.map(
+                lambda *x: torch.stack(x, dim=0).mean(), *self.action_results
+            ),
+        )
+
+        metrics = {}
+        if losses is not None:
+            metrics.update(losses)
+        if actions is not None:
+            metrics.update(actions)
+        if len(metrics) == 0:
+            return None
+
+        if accelerator.is_main_process:
+            metrics = {f"val/{k}": v for k, v in metrics.items()}
+            accelerator.log(metrics, step=step)
+            return metrics
+        return None
+
+
+class PiSimpleTrainer(SimpleTrainer):
+    @torch.no_grad()
+    def eval(self):
+        assert self.val_dataloader is not None and self.metric is not None, (
+            "val_dataloader and metric should not be None"
+        )
+        training = self.model.training
+        self.model.eval()
+        torch.cuda.empty_cache()
+        if self.accelerator.is_main_process:
+            logger.info("\n" + "=" * 50 + "BEGIN EVAL" + "=" * 50)
+
+        unwrapped_model = self.accelerator.unwrap_model(self.model)
+        update_kwargs = {}
+        if "model" in signature(self.metric.update).parameters:
+            update_kwargs["model"] = unwrapped_model
+
+        for val_step_id, batch in enumerate(self.val_dataloader):
+            model_outputs = self.model(batch)
+            self.metric.update(batch, model_outputs, **update_kwargs)
+            if (val_step_id + 1) % 10 == 0 and self.accelerator.is_main_process:
+                logger.info(f"eval: {val_step_id + 1}")
+
+        self.accelerator.wait_for_everyone()
+        compute_kwargs = {}
+        if "accelerator" in signature(self.metric.compute).parameters:
+            compute_kwargs["accelerator"] = self.accelerator
+        if "step" in signature(self.metric.compute).parameters:
+            compute_kwargs["step"] = self.trainer_progress_state.global_step_id
+        metric = self.metric.compute(**compute_kwargs)
+        self.accelerator.wait_for_everyone()
+        self.metric.reset()
+        torch.cuda.empty_cache()
+        self.model.train(training)
+        return metric
 
 
 def build_model(config):
@@ -318,11 +451,11 @@ def main(args, config, accelerator):
     if data_config.asset_id is not None:
         norm_stats_path = os.path.join(assets_dir, data_config.asset_id, "norm_stats.json")
     resume_from = get_resume_from(args, config)
-    trainer = SimpleTrainer(
+    trainer = PiSimpleTrainer(
         model=model,
         dataloader=train_dataloader,
         val_dataloader=val_dataloader,
-        metric=LossMetric(),
+        metric=LossAndActionMetric(),
         optimizer=optimizer,
         lr_scheduler=lr_scheduler,
         accelerator=accelerator,
@@ -340,6 +473,7 @@ def main(args, config, accelerator):
                 save_step_freq=config.save_interval,
                 save_epoch_freq=None,
                 save_model=False,
+                save_when_loop_end=False,
             ),
             AfterBackwardHook(),
             SaveNormStatsHook(

@@ -93,8 +93,8 @@ if model_type == "joint_model":
         steps_to_go_loss_weight=0.1,
         repr_loss_weight=0.1,
         separate_repr_token=True,
-        expert_attend_to_repr_token=False,
-        expert_attend_to_pred_token=False,
+        expert_attend_to_repr_token=True,
+        expert_attend_to_pred_token=True,
     )
     dataset_wrappers = [
         partial(hobot_data_loader.PredictionDataset,
