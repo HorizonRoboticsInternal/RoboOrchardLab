@@ -389,15 +389,8 @@ class SaveNormStatsHook(PipelineHooks):
                 logger.warning("No checkpoint dir found for id %s", last_id)
             return
 
-        model_dir = os.path.join(ckpt_dir, "model")
-        if not os.path.isdir(model_dir):
-            if args.accelerator.is_main_process:
-                logger.warning("Model dir not found: %s", model_dir)
-            return
-
-        dst = os.path.join(model_dir, "norm_stats.json")
+        dst = os.path.join(ckpt_dir, "norm_stats.json")
         if args.accelerator.is_main_process:
-            os.makedirs(model_dir, exist_ok=True)
             shutil.copy2(self.norm_stats_path, dst)
             logger.info("Copied norm_stats.json to %s", dst)
 
