@@ -26,5 +26,14 @@ accelerate launch \
     --multi-gpu \
     train.py \
     --workspace /data/weixu/log/robo_orchard/exp000
-    --config config_pi_libero.py
+    --config config_pi.py
+```
+
+## evaluation
+
+Modify eval_bridge.sh (HOBOT_DIR, tmp_ckpt, workspace_dir) according to your
+environment and run the following:
+
+```bash
+./eval_bridge.sh
 ```
